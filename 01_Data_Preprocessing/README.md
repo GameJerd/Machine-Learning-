@@ -1089,14 +1089,6 @@ Congratulations, fellow explorer! You've completed the expedition and achieved:
 ✅ **The critical distinction** between fit_transform() and transform()  
 ✅ **A working project** you can extend and experiment with  
 
-### Where to Go Next
-
-| Direction | What You'll Learn |
-|-----------|------------------|
-| **Classification** | Add a KNeighborsClassifier to predict digits |
-| **Cross-Validation** | Evaluate your model properly |
-| **GridSearchCV** | Optimize number of PCA components |
-| **Other Datasets** | Try faces, iris, or your own images |
 
 ---
 

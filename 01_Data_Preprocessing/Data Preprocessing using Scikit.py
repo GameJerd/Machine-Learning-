@@ -1,140 +1,227 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+
 from sklearn.datasets import load_digits
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.ensemble import VotingClassifier
+
 from PIL import Image, ImageOps
 
-# --- PHASE 1: TRAIN THE AI (The "Knowledge Base") ---
+# STEP 2: LOAD THE TRAINING DATA
 
-print("Training the model on standard digits...")
-
-# 1. Load Data
 digits = load_digits()
 X = digits.data
 y = digits.target
 
-# 2. Simulate Real-World Messiness (Corrupt the data)
-# We delete 15% of pixels to force the model to learn 'robustness'
-rng = np.random.RandomState(42)
-X_corrupted = X.copy()
-mask = rng.rand(*X.shape) < 0.15
-X_corrupted[mask] = np.nan
+print(f"Step 1: Loaded {len(X)} digit images (8x8 pixels each)")
 
-# 3. Build the Processing Pipeline (Must keep these objects to use later!)
-# Step A: Imputer (Fix missing holes)
+
+np.random.seed(42)
+X_messy = X.copy()
+missing_mask = np.random.rand(*X.shape) < 0.15
+X_messy[missing_mask] = np.nan
+
+print(f"Step 2: Simulated messy data (15% of pixels missing)")
+
+
 imputer = SimpleImputer(strategy='median')
-X_imputed = imputer.fit_transform(X_corrupted)
+X_clean = imputer.fit_transform(X_messy)
 
-# Step B: Standardization (Center data)
+print(f"Step 3: Imputation complete (filled missing values with median)")
+
+
 scaler = StandardScaler()
-X_std = scaler.fit_transform(X_imputed)
+X_scaled = scaler.fit_transform(X_clean)
 
-# Step C: PCA (Compress to 2D)
-pca = PCA(n_components=2)
-X_pca = pca.fit_transform(X_std)
+print(f"Step 4: Standardization complete (all features now on same scale)")
 
-print("Model trained! The AI can now map 64-pixel images to a 2D map.")
+# STEP 6: PERSONALIZED LEARNING - Add Your Handwriting Style
 
+extra_images = []
+extra_labels = []
 
-# --- PHASE 2: THE INTERACTIVE FUNCTION ---
-
-def test_my_image(image_path):
-    """
-    Reads a local image file, converts it to 8x8 format,
-    runs it through the AI pipeline, and plots it.
-    """
+if os.path.exists("my_digit.png"):
     try:
-        # 1. Load Image using PIL
-        img = Image.open(image_path).convert('L')  # Convert to Grayscale
-
-        # 2. Invert colors (If you drew black digit on white paper)
-        # The dataset expects White Digit on Black Background.
-        # We assume the user drew on a white background, so we invert.
-        img = ImageOps.invert(img)
-
-        # 3. Resize to 8x8 pixels (The required resolution)
-        img = img.resize((8, 8), Image.Resampling.LANCZOS)
-
-        # 4. Convert to NumPy array and Scale to 0-16 range
+        img = Image.open("my_digit.png")
+        
+        if img.mode == 'RGBA':
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        
+        img = ImageOps.invert(img.convert('L'))
         img_array = np.array(img)
-        # Normal images are 0-255. We scale to 0-16.
-        img_array = (img_array / 255.0) * 16.0
-
-        # 5. Flatten to (1, 64) shape
-        # The model expects a flat row of numbers, not a grid.
-        feature_vector = img_array.reshape(1, -1)
-
-        # --- RUN THE PIPELINE ---
-        # Note: We use .transform(), NOT .fit_transform()
-        # We must use the *existing* logic the AI learned earlier.
         
-        # A. Impute (even if no missing values, we must pass through it)
-        feat_imputed = imputer.transform(feature_vector)
-        
-        # B. Standardize (using the mean/std learned from the original data)
-        feat_std = scaler.transform(feat_imputed)
-        
-        # C. PCA (Project into the 2D map)
-        feat_pca = pca.transform(feat_std)
+        pixels = np.argwhere(img_array > 30)
+        if len(pixels) > 0:
+            top, left = pixels.min(axis=0)
+            bottom, right = pixels.max(axis=0)
+            padding = int(max(bottom-top, right-left) * 0.15)
+            top, left = max(0, top-padding), max(0, left-padding)
+            bottom = min(img_array.shape[0], bottom+padding)
+            right = min(img_array.shape[1], right+padding)
+            
+            cropped = img_array[top:bottom, left:right]
+            size = max(cropped.shape)
+            square = np.zeros((size, size), dtype=np.uint8)
+            h, w = cropped.shape
+            square[(size-h)//2:(size-h)//2+h, (size-w)//2:(size-w)//2+w] = cropped
+            small = np.array(Image.fromarray(square).resize((8, 8), Image.Resampling.LANCZOS))
+            your_digit = small / 255.0 * 16.0
+            
+            for _ in range(30):
+                variation = your_digit.flatten() + np.random.normal(0, 0.5, 64)
+                extra_images.append(np.clip(variation, 0, 16))
+                extra_labels.append(7)
+            
+            print(f"Step 5: Added 30 samples of YOUR handwriting")
+    except:
+        pass
 
-        # --- PLOT RESULTS ---
-        plt.figure(figsize=(12, 6))
+if extra_images:
+    X_combined = np.vstack([X_clean, np.array(extra_images)])
+    y_combined = np.concatenate([y, np.array(extra_labels)])
+    X_scaled = scaler.fit_transform(X_combined)
+    y = y_combined
+else:
+    print(f"Step 5: No custom image found (save 'my_digit.png' to personalize)")
 
-        # Subplot 1: The map
-        plt.subplot(1, 2, 1)
-        # Plot the original dataset as background
-        scatter = plt.scatter(X_pca[:, 0], X_pca[:, 1], c=y, cmap='tab10', alpha=0.3, s=20)
-        # Plot the USER'S new point
-        plt.scatter(feat_pca[0, 0], feat_pca[0, 1], c='red', s=200, marker='*', label='Your Image')
+# STEP 7: PCA - Reducing Dimensions for Visualization
+
+pca = PCA(n_components=2)
+X_2d = pca.fit_transform(X_scaled)
+
+print(f"Step 6: PCA complete (64 dimensions → 2 for visualization)")
+
+# STEP 8: TRAIN THE CLASSIFIER
+
+knn = KNeighborsClassifier(n_neighbors=5, weights='distance')
+svm = SVC(kernel='rbf', probability=True, C=10)
+
+classifier = VotingClassifier(
+    estimators=[('knn', knn), ('svm', svm)],
+    voting='soft'
+)
+classifier.fit(X_scaled, y)
+
+print(f"Step 7: Classifier trained (KNN + SVM ensemble)")
+
+# THE PREDICTION FUNCTION
+
+def predict_digit(image_path):
+    """Reads image file, preprocesses it, and predicts the digit"""
+    
+    print("ANALYZING YOUR IMAGE....")
+    
+    try:
+        img = Image.open(image_path)
+        print(f"Loaded: {image_path}")
         
+        if img.mode == 'RGBA':
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        
+        img = ImageOps.invert(img.convert('L'))
+        img_array = np.array(img)
+        
+        pixels = np.argwhere(img_array > 30)
+        if len(pixels) == 0:
+            print("Error: No digit found in image!")
+            return
+        
+        top, left = pixels.min(axis=0)
+        bottom, right = pixels.max(axis=0)
+        padding = int(max(bottom-top, right-left) * 0.15)
+        top, left = max(0, top-padding), max(0, left-padding)
+        bottom = min(img_array.shape[0], bottom+padding)
+        right = min(img_array.shape[1], right+padding)
+        
+        cropped = img_array[top:bottom, left:right]
+        
+        size = max(cropped.shape)
+        square = np.zeros((size, size), dtype=np.uint8)
+        h, w = cropped.shape
+        square[(size-h)//2:(size-h)//2+h, (size-w)//2:(size-w)//2+w] = cropped
+        small = Image.fromarray(square).resize((8, 8), Image.Resampling.LANCZOS)
+        digit_8x8 = np.array(small, dtype=np.float64) / 255.0 * 16.0
+        
+        print(f"Processed: Cropped, squared, resized to 8x8")
+        
+        features = digit_8x8.reshape(1, -1)
+        
+        features = imputer.transform(features)
+        features = scaler.transform(features)
+        
+        prediction = classifier.predict(features)[0]
+        probabilities = classifier.predict_proba(features)[0]
+        confidence = probabilities[prediction] * 100
+        
+        top3 = np.argsort(probabilities)[::-1][:3]
+        
+        print(f"PREDICTION: The digit is  [ {prediction} ]")
+        print(f"CONFIDENCE: {confidence:.1f}%")
+        print("Top 3 guesses:")
+        for i, digit in enumerate(top3):
+            marker = " <<<" if i == 0 else ""
+            print(f"   {i+1}. Digit {digit}: {probabilities[digit]*100:.1f}%{marker}")
+        
+        features_2d = pca.transform(features)
+        
+        fig = plt.figure(figsize=(15, 5))
+        fig.suptitle(f"Prediction: Digit {prediction} ({confidence:.1f}% confidence)", 
+                    fontsize=14, fontweight='bold')
+        
+        plt.subplot(1, 3, 1)
+        scatter = plt.scatter(X_2d[:, 0], X_2d[:, 1], c=y, cmap='tab10', alpha=0.3, s=15)
+        plt.scatter(features_2d[0, 0], features_2d[0, 1], c='red', s=200, marker='*', 
+                   label='Your digit', edgecolors='black')
+        plt.colorbar(scatter, label='Digit')
+        plt.xlabel('Principal Component 1')
+        plt.ylabel('Principal Component 2')
+        plt.title('PCA Map\n(Your digit = red star)')
         plt.legend()
-        plt.title(f"Where your digit landed\n(Coords: {feat_pca[0,0]:.2f}, {feat_pca[0,1]:.2f})")
-        plt.xlabel('PC 1')
-        plt.ylabel('PC 2')
         plt.grid(True, alpha=0.3)
-
-        # Subplot 2: What the AI actually "saw"
-        plt.subplot(1, 2, 2)
-        plt.imshow(img_array, cmap='gray') # Show the 8x8 grid
-        plt.title("What the AI saw (8x8 Input)")
+        
+        plt.subplot(1, 3, 2)
+        plt.imshow(digit_8x8, cmap='gray', vmin=0, vmax=16)
+        plt.title('What AI Sees\n(Your image as 8x8 pixels)')
         plt.axis('off')
-
+        for i in range(8):
+            for j in range(8):
+                val = digit_8x8[i, j]
+                if val > 1:
+                    color = 'black' if val > 8 else 'white'
+                    plt.text(j, i, f'{val:.0f}', ha='center', va='center', 
+                            fontsize=6, color=color)
+        
+        plt.subplot(1, 3, 3)
+        examples = np.zeros((20, 45))
+        for d in range(10):
+            idx = np.where(digits.target == d)[0][0]
+            row, col = d // 5, d % 5
+            examples[row*10:row*10+8, col*9:col*9+8] = digits.images[idx]
+        plt.imshow(examples, cmap='gray')
+        plt.title('Training Examples (0-9)\n(Compare with your digit)')
+        plt.axis('off')
+        
         plt.tight_layout()
         plt.show()
         
-        print("Success! Check the plot to see which cluster your digit landed in.")
-
+        return prediction
+        
     except FileNotFoundError:
-        print(f"Error: Could not find file '{image_path}'. Please check the name.")
+        print(f"Error: File '{image_path}' not found!")
+        print("Save your digit image as 'my_digit.png' in this folder.")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"Error: {e}")
 
-# --- PHASE 3: RUN IT ---
 
-# INSTRUCTIONS FOR YOU:
-# 1. Open MS Paint or Photoshop.
-# 2. Make a square canvas (e.g., 200x200).
-# 3. Draw a big black number (0-9) on the white background.
-# 4. Save it as "my_digit.png" in the same folder as this script.
-# 5. Run the line below:
-
-# Uncomment this line when you have a file ready!
-# test_my_image("my_digit.png")
-
-# --- DEMO MODE ---
-# Since I cannot see your files, I will generate a fake "Handwritten 0"
-# to demonstrate what happens when you run the function.
-print("\n--- Running Demo Mode (Simulating a user uploading a '0') ---")
-dummy_zero = np.zeros((8, 8))
-dummy_zero[1:7, 2:6] = 16  # Draw a box (looks like a 0)
-dummy_zero[2:6, 3:5] = 0   # Hollow out the center
-
-# We save this as a temp file just to test our function
-from PIL import Image
-# Invert for saving (because our function expects black-on-white input to invert back)
-demo_img = Image.fromarray((255 - (dummy_zero * (255/16))).astype('uint8')).convert('L')
-demo_img.save("demo_zero.png")
-
-test_my_image("demo_zero.png")
+if __name__ == "__main__":
+    print("\nTesting with your image...")
+    predict_digit("my_digit.png")
